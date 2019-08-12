@@ -11,6 +11,9 @@ message(STATUS "    version: ${OpenCV_VERSION}")
 message(STATUS "    libraries: ${OpenCV_LIBS}")
 message(STATUS "    include path: ${OpenCV_INCLUDE_DIRS}")
 
+set(DEPENDENCIES realsense ${OpenCV_LIBS})
+
 include_directories(${OpenCV_INCLUDE_DIRS})
+
 add_executable(realsense_kinfu main.cpp)
-target_link_libraries(realsense_kinfu ${OpenCV_LIBS})
+target_link_libraries(realsense_kinfu realsense ${DEPENDENCIES})

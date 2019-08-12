@@ -10,8 +10,10 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/rgbd/kinfu.hpp>
+#include <librealsense/rs.hpp>
 
 using namespace cv;
+using namespace rs;
 using namespace cv::kinfu;
 using namespace std;
 
@@ -112,16 +114,30 @@ public:
     DepthSource(String fileListName, int cam) :
             depthFileList(fileListName.empty() ? vector<string>() : readDepth(fileListName)),
             frameIdx(0),
-            vc( cam >= 0 ? VideoCapture(VideoCaptureAPIs::CAP_OPENNI2 + cam) : VideoCapture()),
+            _rs_ctx(),
+            _rs_camera(*_rs_ctx.get_device(cam)),
             undistortMap1(),
             undistortMap2(),
-            useKinect2Workarounds(true)
-    { }
+            useKinect2Workarounds(false)
+    {
+        using_cam = false;
+        //TODO: support camera 1, 2....
+        if(_rs_ctx.get_device_count() > 0)
+        {
+            _rs_camera.enable_stream(rs::stream::depth,
+                                     480, //w
+                                     360, //h
+                                     rs::format::z16,
+                                     30); //frameRate
+            _rs_camera.start();
+            using_cam = true;
+        }
+    }
 
     UMat getDepth()
     {
         UMat out;
-        if (!vc.isOpened())
+        if (!using_cam)
         {
             if (frameIdx < depthFileList.size())
             {
@@ -135,8 +151,15 @@ public:
         }
         else
         {
-            vc.grab();
-            vc.retrieve(out, CAP_OPENNI_DEPTH_MAP);
+            if(_rs_camera.is_streaming()) _rs_camera.wait_for_frames();
+            //FIXME: necessary to retrieve the intrinsics each call?
+            _intrin = _rs_camera.get_stream_intrinsics( rs::stream::depth );
+            Mat depth16( _intrin.height,
+                         _intrin.width,
+                         CV_16U,
+                         (uchar *)_rs_camera.get_frame_data(rs::stream::depth)
+                        );
+            depth16.copyTo(out);
 
             // workaround for Kinect 2
             if(useKinect2Workarounds)
@@ -158,18 +181,15 @@ public:
 
     bool empty()
     {
-        return depthFileList.empty() && !(vc.isOpened());
+        return depthFileList.empty() && !(using_cam);
     }
 
     void updateParams(Params& params)
     {
-        if (vc.isOpened())
+        if (using_cam)
         {
             // this should be set in according to user's depth sensor
-            int w = (int)vc.get(VideoCaptureProperties::CAP_PROP_FRAME_WIDTH);
-            int h = (int)vc.get(VideoCaptureProperties::CAP_PROP_FRAME_HEIGHT);
-
-            float focal = (float)vc.get(CAP_OPENNI_DEPTH_GENERATOR | CAP_PROP_OPENNI_FOCAL_LENGTH);
+            _intrin = _rs_camera.get_stream_intrinsics( rs::stream::depth );
 
             // it's recommended to calibrate sensor to obtain its intrinsics
             float fx, fy, cx, cy;
@@ -184,11 +204,12 @@ public:
             }
             else
             {
-                fx = fy = focal;
-                cx = w/2 - 0.5f;
-                cy = h/2 - 0.5f;
+                fx = _intrin.fx;
+                fy = _intrin.fy;
+                cx = _intrin.ppx;
+                cy = _intrin.ppy;
 
-                frameSize = Size(w, h);
+                frameSize = Size(_intrin.width, _intrin.height);
             }
 
             Matx33f camMatrix = Matx33f(fx,  0, cx,
@@ -212,8 +233,11 @@ public:
 
     vector<string> depthFileList;
     size_t frameIdx;
-    VideoCapture vc;
+    context _rs_ctx;
+    device &_rs_camera;
+    intrinsics _intrin;
     UMat undistortMap1, undistortMap2;
+    bool using_cam;
     bool useKinect2Workarounds;
 };
 
